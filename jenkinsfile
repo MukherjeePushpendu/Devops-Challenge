@@ -1,0 +1,72 @@
+pipeline {
+    agent any
+
+    environment {
+        REPO = 'MukherjeePushpendu/fusionpact-devops-challenge'
+        DOCKERHUB_CREDENTIALS = 'dockerhub-credentials'
+        SSH_KEY = 'ec2-ssh-key'
+        CLOUD_SERVER = 'ubuntu@ec2-13-233-116-108.ap-south-1.compute.amazonaws.com'
+        IMAGE_FRONT = 'frontend'
+        IMAGE_BACK = 'backend'
+        TAG = "${BUILD_NUMBER}"
+    }
+
+    stages {
+        stage('Checkout Code') {
+            steps {
+                git branch: 'main', url: "https://github.com/${REPO}.git"
+            }
+        }
+
+        stage('Build Docker Images') {
+            steps {
+                sh 'docker compose build'
+            }
+        }
+
+        stage('Push to Docker Hub') {
+    environment {
+        IMAGE_FRONT = "frontend"
+        IMAGE_BACK  = "backend"
+        TAG = "latest"
+    }
+    steps {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+            sh """
+                echo "$PASS" | docker login -u "$USER" --password-stdin
+                docker tag frontend:latest $USER/${IMAGE_FRONT}:${TAG}
+                docker tag backend:latest $USER/${IMAGE_BACK}:${TAG}
+                docker push $USER/${IMAGE_FRONT}:${TAG}
+                docker push $USER/${IMAGE_BACK}:${TAG}
+            """
+        }
+    }
+}
+
+
+        stage('Deploy to EC2') {
+            steps {
+                sshagent (credentials: ["${SSH_KEY}"]) {
+                    sh """
+                        ssh -o StrictHostKeyChecking=no ${CLOUD_SERVER} '
+                            cd ~/fusionpact-devops-challenge || git clone https://github.com/${REPO}.git ~/fusionpact-devops-challenge
+                            cd ~/fusionpact-devops-challenge
+                            sudo docker compose down || true
+                            sudo docker compose pull || true
+                            sudo docker compose up -d
+                        '
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo '✅ Deployment successful! Check EC2 Public IP.'
+        }
+        failure {
+            echo '❌ Build or deployment failed. Check logs.'
+        }
+    }
+}
