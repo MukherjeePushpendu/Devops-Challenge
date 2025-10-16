@@ -40,16 +40,36 @@ pipeline {
             steps {
                 sh """
                      ssh -i /var/lib/jenkins/.ssh/heliii.pem -o StrictHostKeyChecking=no ubuntu@${EC2_IP} '
+                        set -e
+
+                        # Stop & remove old containers
+                        docker stop backend frontend prometheus grafana || true
+                        docker rm backend frontend prometheus grafana || true
+
+                        # Pull latest images
                         docker pull pushpendumukherjee/${IMAGE_BACK}:${TAG}
                         docker pull pushpendumukherjee/${IMAGE_FRONT}:${TAG}
+                        docker pull prom/prometheus:latest
+                        docker pull grafana/grafana:latest
 
-                        docker stop backend || true
-                        docker rm backend || true
-                        docker run -d --name backend -p 5000:5000 pushpendumukherjee/${IMAGE_BACK}:${TAG}
+                        # Run backend
+                        docker run -d --name backend -p 8000:8000 pushpendumukherjee/${IMAGE_BACK}:${TAG}
 
-                        docker stop frontend || true
-                        docker rm frontend || true
-                        docker run -d --name frontend -p 80:80 pushpendumukherjee/${IMAGE_FRONT}:${TAG}
+                        # Run frontend
+                        docker run -d --name frontend -p 80:80 --link backend:backend pushpendumukherjee/${IMAGE_FRONT}:${TAG}
+
+                        # Run Prometheus
+                        docker run -d --name prometheus -p 9090:9090 \
+                            -v ~/fusionpact/prometheus.yml:/etc/prometheus/prometheus.yml \
+                            prom/prometheus:latest
+
+                        # Run Grafana
+                        docker run -d --name grafana -p 3000:3000 \
+                            -e GF_SECURITY_ADMIN_USER=admin \
+                            -e GF_SECURITY_ADMIN_PASSWORD=admin \
+                            -v grafana-storage:/var/lib/grafana \
+                            --link prometheus:prometheus \
+                            grafana/grafana:latest
                     '
                 """
             }
@@ -58,7 +78,7 @@ pipeline {
 
     post {
         success {
-            echo "✅ Deployment successful! Docker images pushed with tag: ${TAG}"
+            echo "✅ Deployment successful! Services running on EC2 IP: ${EC2_IP}"
         }
         failure {
             echo '❌ Build or deployment failed. Check logs.'
