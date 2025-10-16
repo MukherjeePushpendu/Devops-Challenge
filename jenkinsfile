@@ -5,10 +5,9 @@ pipeline {
         REPO = 'MukherjeePushpendu/Devops-Challenge'
         IMAGE_FRONT = 'fusionpactdevopschallenge-frontend'
         IMAGE_BACK = 'fusionpactdevopschallenge-backend'
-        TAG = "${BUILD_NUMBER}"           // Unique tag per build
+        TAG = "${BUILD_NUMBER}"
         EC2_IP = '43.204.144.250'
         PEM_FILE = '/var/lib/jenkins/.ssh/heliii.pem'
-        REMOTE_DIR = '/home/ubuntu/fusionpact'
     }
 
     stages {
@@ -24,7 +23,7 @@ pipeline {
             }
         }
 
-        stage('Push Docker Images') {
+        stage('Push to Docker Hub') {
             steps {
                 withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
                     sh """
@@ -38,33 +37,34 @@ pipeline {
             }
         }
 
-        stage('Deploy with Docker Compose on EC2') {
+        stage('Deploy Docker Compose on EC2') {
             steps {
                 sh """
-                    ssh -i ${PEM_FILE} -o StrictHostKeyChecking=no ubuntu@${EC2_IP} '
-                        # Create folder if it does not exist
-                        mkdir -p ${REMOTE_DIR} &&
-                        cd ${REMOTE_DIR} &&
-                        
-                        # Copy docker-compose.yml and prometheus.yml
-                        cat > docker-compose.yml <<EOF
-version: "3.9"
+                    ssh -i ${PEM_FILE} -o StrictHostKeyChecking=no ubuntu@${EC2_IP} \\
+                    "sudo mkdir -p /home/ubuntu/fusionpact &&
+                     sudo chown -R ubuntu:ubuntu /home/ubuntu/fusionpact"
+                """
+
+                sh """
+                    ssh -i ${PEM_FILE} -o StrictHostKeyChecking=no ubuntu@${EC2_IP} \\
+                    \"sudo tee /home/ubuntu/fusionpact/docker-compose.yml > /dev/null <<'EOF'
+version: '3.9'
 
 services:
   backend:
-    image: pushpendumukherjee/${IMAGE_BACK}:${TAG}
+    image: pushpendumukherjee/fusionpactdevopschallenge-backend:${TAG}
     container_name: backend
     ports:
-      - "5000:5000"
+      - '5000:5000'
     networks:
       - app-network
     restart: unless-stopped
 
   frontend:
-    image: pushpendumukherjee/${IMAGE_FRONT}:${TAG}
+    image: pushpendumukherjee/fusionpactdevopschallenge-frontend:${TAG}
     container_name: frontend
     ports:
-      - "80:80"
+      - '80:80'
     depends_on:
       - backend
     networks:
@@ -77,9 +77,9 @@ services:
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
     command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
+      - '--config.file=/etc/prometheus/prometheus.yml'
     ports:
-      - "9090:9090"
+      - '9090:9090'
     networks:
       - app-network
     depends_on:
@@ -89,14 +89,14 @@ services:
   grafana:
     image: grafana/grafana:latest
     container_name: grafana
-    user: "472:472"
+    user: '472:472'
     volumes:
       - grafana-storage:/var/lib/grafana
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
     ports:
-      - "3000:3000"
+      - '3000:3000'
     networks:
       - app-network
     depends_on:
@@ -109,24 +109,27 @@ networks:
 
 volumes:
   grafana-storage: {}
-EOF
+EOF\"
+                """
 
-                        cat > prometheus.yml <<EOF
+                sh """
+                    ssh -i ${PEM_FILE} -o StrictHostKeyChecking=no ubuntu@${EC2_IP} \\
+                    \"sudo tee /home/ubuntu/fusionpact/prometheus.yml > /dev/null <<'EOF'
 global:
   scrape_interval: 15s
 
 scrape_configs:
-  - job_name: 'backend'
+  - job_name: backend
     static_configs:
       - targets: ['backend:5000']
-EOF
+EOF\"
+                """
 
-                        # Stop and remove old containers
-                        docker-compose down || true
-
-                        # Start all services
-                        docker-compose up -d
-                    '
+                sh """
+                    ssh -i ${PEM_FILE} -o StrictHostKeyChecking=no ubuntu@${EC2_IP} \\
+                    'cd /home/ubuntu/fusionpact &&
+                     docker-compose down || true &&
+                     docker-compose up -d'
                 """
             }
         }
@@ -134,10 +137,10 @@ EOF
 
     post {
         success {
-            echo "✅ Deployment successful! All containers are running with tag: ${TAG}"
+            echo "✅ Deployment successful! Docker Compose stack is running."
         }
         failure {
-            echo '❌ Deployment failed. Check logs.'
+            echo "❌ Deployment failed. Check the logs."
         }
     }
 }
