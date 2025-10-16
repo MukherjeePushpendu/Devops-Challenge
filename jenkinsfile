@@ -7,6 +7,7 @@ pipeline {
         IMAGE_BACK = 'fusionpactdevopschallenge-backend'
         TAG = "${BUILD_NUMBER}"   // Unique tag per build
         EC2_IP = '43.204.144.250'
+        PEM_FILE = '/var/lib/jenkins/.ssh/heliii.pem'
     }
 
     stages {
@@ -39,8 +40,13 @@ pipeline {
         stage('Deploy to EC2') {
             steps {
                 sh """
-                     ssh -i /var/lib/jenkins/.ssh/heliii.pem -o StrictHostKeyChecking=no ubuntu@${EC2_IP} '
+                    chmod 400 ${PEM_FILE} || true
+
+                    ssh -i ${PEM_FILE} -o StrictHostKeyChecking=no ubuntu@${EC2_IP} '
                         set -e
+
+                        # Create folder for Prometheus config
+                        mkdir -p ~/fusionpact
 
                         # Stop & remove old containers
                         docker stop backend frontend prometheus grafana || true
@@ -58,10 +64,25 @@ pipeline {
                         # Run frontend
                         docker run -d --name frontend -p 80:80 --link backend:backend pushpendumukherjee/${IMAGE_FRONT}:${TAG}
 
+                        # Create Prometheus config file if not exists
+                        if [ ! -f ~/fusionpact/prometheus.yml ]; then
+                            echo "global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'backend'
+    static_configs:
+      - targets: ['backend:8000']" > ~/fusionpact/prometheus.yml
+                        fi
+
                         # Run Prometheus
                         docker run -d --name prometheus -p 9090:9090 \
                             -v ~/fusionpact/prometheus.yml:/etc/prometheus/prometheus.yml \
+                            --link backend:backend \
                             prom/prometheus:latest
+
+                        # Create Grafana volume if not exists
+                        docker volume inspect grafana-storage || docker volume create grafana-storage
 
                         # Run Grafana
                         docker run -d --name grafana -p 3000:3000 \
@@ -78,7 +99,7 @@ pipeline {
 
     post {
         success {
-            echo "✅ Deployment successful! Services running on EC2 IP: ${EC2_IP}"
+            echo "✅ Deployment successful! Docker images pushed with tag: ${TAG}"
         }
         failure {
             echo '❌ Build or deployment failed. Check logs.'
