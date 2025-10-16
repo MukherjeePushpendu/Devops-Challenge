@@ -7,7 +7,7 @@ pipeline {
         IMAGE_FRONT = 'fusionpactdevopschallenge-frontend'
         IMAGE_BACK = 'fusionpactdevopschallenge-backend'
         TAG = "${BUILD_NUMBER}"
-        EC2_IP = '13.201.83.30'
+        EC2_IP = '43.204.144.250'
     }
 
     stages {
