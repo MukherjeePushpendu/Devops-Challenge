@@ -3,11 +3,11 @@ pipeline {
 
     environment {
         REPO = 'MukherjeePushpendu/Devops-Challenge'
+        DOCKERHUB_CREDENTIALS = 'dockerhub-credentials'
         IMAGE_FRONT = 'fusionpactdevopschallenge-frontend'
         IMAGE_BACK = 'fusionpactdevopschallenge-backend'
         TAG = "${BUILD_NUMBER}"
-        EC2_IP = '43.204.144.250'
-        PEM_FILE = '/var/lib/jenkins/.ssh/heliii.pem'
+        EC2_IP = '13.201.83.30'
     }
 
     stages {
@@ -25,7 +25,7 @@ pipeline {
 
         stage('Push to Docker Hub') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                withCredentials([usernamePassword(credentialsId: "${DOCKERHUB_CREDENTIALS}", usernameVariable: 'USER', passwordVariable: 'PASS')]) {
                     sh """
                         echo "$PASS" | docker login -u "$USER" --password-stdin
                         docker tag ${IMAGE_FRONT}:latest $USER/${IMAGE_FRONT}:${TAG}
@@ -37,99 +37,46 @@ pipeline {
             }
         }
 
-        stage('Deploy Docker Compose on EC2') {
+        stage('Deploy to EC2') {
             steps {
                 sh """
-                    ssh -i ${PEM_FILE} -o StrictHostKeyChecking=no ubuntu@${EC2_IP} \\
-                    "sudo mkdir -p /home/ubuntu/fusionpact &&
-                     sudo chown -R ubuntu:ubuntu /home/ubuntu/fusionpact"
-                """
+                ssh -i /var/lib/jenkins/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@${EC2_IP} '
+                    echo "✅ Connected to EC2. Starting full deployment..."
 
-                sh """
-                    ssh -i ${PEM_FILE} -o StrictHostKeyChecking=no ubuntu@${EC2_IP} \\
-                    \"sudo tee /home/ubuntu/fusionpact/docker-compose.yml > /dev/null <<'EOF'
-version: '3.9'
+                    # Ensure latest repo exists
+                    if [ ! -d "/home/ubuntu/devops-challenge" ]; then
+                        git clone https://github.com/MukherjeePushpendu/Devops-Challenge.git /home/ubuntu/devops-challenge
+                    else
+                        cd /home/ubuntu/devops-challenge && git pull
+                    fi
 
-services:
-  backend:
-    image: pushpendumukherjee/fusionpactdevopschallenge-backend:${TAG}
-    container_name: backend
-    ports:
-      - '5000:5000'
-    networks:
-      - app-network
-    restart: unless-stopped
+                    # Stop and remove old containers
+                    docker stop backend frontend prometheus grafana || true
+                    docker rm backend frontend prometheus grafana || true
 
-  frontend:
-    image: pushpendumukherjee/fusionpactdevopschallenge-frontend:${TAG}
-    container_name: frontend
-    ports:
-      - '80:80'
-    depends_on:
-      - backend
-    networks:
-      - app-network
-    restart: unless-stopped
+                    # Pull latest images
+                    docker pull pushpendumukherjee/fusionpactdevopschallenge-backend:${TAG}
+                    docker pull pushpendumukherjee/fusionpactdevopschallenge-frontend:${TAG}
 
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-    ports:
-      - '9090:9090'
-    networks:
-      - app-network
-    depends_on:
-      - backend
-    restart: unless-stopped
+                    # Run backend
+                    docker run -d --name backend -p 5000:5000 pushpendumukherjee/fusionpactdevopschallenge-backend:${TAG}
 
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    user: '472:472'
-    volumes:
-      - grafana-storage:/var/lib/grafana
-    environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    ports:
-      - '3000:3000'
-    networks:
-      - app-network
-    depends_on:
-      - prometheus
-    restart: unless-stopped
+                    # Run frontend
+                    docker run -d --name frontend -p 80:80 pushpendumukherjee/fusionpactdevopschallenge-frontend:${TAG}
 
-networks:
-  app-network:
-    driver: bridge
+                    # Run Prometheus
+                    docker run -d --name prometheus -p 9090:9090 \
+                        -v /home/ubuntu/devops-challenge/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml \
+                        prom/prometheus
 
-volumes:
-  grafana-storage: {}
-EOF\"
-                """
+                    # Run Grafana
+                    docker run -d --name grafana -p 3000:3000 \
+                        -v /home/ubuntu/devops-challenge/monitoring/grafana/provisioning:/etc/grafana/provisioning \
+                        -v /home/ubuntu/devops-challenge/monitoring/grafana/dashboards:/var/lib/grafana/dashboards \
+                        grafana/grafana
 
-                sh """
-                    ssh -i ${PEM_FILE} -o StrictHostKeyChecking=no ubuntu@${EC2_IP} \\
-                    \"sudo tee /home/ubuntu/fusionpact/prometheus.yml > /dev/null <<'EOF'
-global:
-  scrape_interval: 15s
-
-scrape_configs:
-  - job_name: backend
-    static_configs:
-      - targets: ['backend:5000']
-EOF\"
-                """
-
-                sh """
-                    ssh -i ${PEM_FILE} -o StrictHostKeyChecking=no ubuntu@${EC2_IP} \\
-                    'cd /home/ubuntu/fusionpact &&
-                     docker-compose down || true &&
-                     docker-compose up -d'
+                    echo "✅ All containers deployed successfully!"
+                '
                 """
             }
         }
@@ -137,10 +84,17 @@ EOF\"
 
     post {
         success {
-            echo "✅ Deployment successful! Docker Compose stack is running."
+            echo """
+✅ Deployment Successful!
+
+🌐 Frontend:  http://${EC2_IP}
+🧠 Backend:   http://${EC2_IP}:5000
+📈 Prometheus: http://${EC2_IP}:9090
+📊 Grafana:   http://${EC2_IP}:3000 (admin / admin)
+"""
         }
         failure {
-            echo "❌ Deployment failed. Check the logs."
+            echo '❌ Deployment failed. Please check Jenkins logs.'
         }
     }
 }
