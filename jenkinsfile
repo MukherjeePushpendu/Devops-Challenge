@@ -3,13 +3,10 @@ pipeline {
 
     environment {
         REPO = 'MukherjeePushpendu/Devops-Challenge'
-        DOCKERHUB_CREDENTIALS = 'dockerhub-credentials'
-        SSH_KEY = 'ec2-ssh-key'
-        CLOUD_SERVER = 'ubuntu@ec2-13-201-83-30.ap-south-1.compute.amazonaws.com'
         IMAGE_FRONT = 'fusionpactdevopschallenge-frontend'
         IMAGE_BACK = 'fusionpactdevopschallenge-backend'
         TAG = "${BUILD_NUMBER}"   // Unique tag per build
-        EC2_IP = 'ec2-13-201-83-30.ap-south-1.compute.amazonaws.com'
+        EC2_IP = '13.201.83.30'
     }
 
     stages {
@@ -27,13 +24,11 @@ pipeline {
 
         stage('Push to Docker Hub') {
             steps {
-                withCredentials([usernamePassword(credentialsId: "${DOCKERHUB_CREDENTIALS}", usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
                     sh """
                         echo "$PASS" | docker login -u "$USER" --password-stdin
-                        # Tag images with Docker Hub username and build number
                         docker tag ${IMAGE_FRONT}:latest $USER/${IMAGE_FRONT}:${TAG}
                         docker tag ${IMAGE_BACK}:latest $USER/${IMAGE_BACK}:${TAG}
-                        # Push images to Docker Hub
                         docker push $USER/${IMAGE_FRONT}:${TAG}
                         docker push $USER/${IMAGE_BACK}:${TAG}
                     """
@@ -42,20 +37,23 @@ pipeline {
         }
 
         stage('Deploy to EC2') {
-    steps {
-        sh """
-        ssh -i /var/lib/jenkins/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@<EC2_IP> '
-            docker pull pushpendumukherjee/fusionpactdevopschallenge-backend:8 &&
-            docker pull pushpendumukherjee/fusionpactdevopschallenge-frontend:8 &&
-            docker stop backend || true && docker rm backend || true &&
-            docker run -d --name backend -p 5000:5000 pushpendumukherjee/fusionpactdevopschallenge-backend:8 &&
-            docker stop frontend || true && docker rm frontend || true &&
-            docker run -d --name frontend -p 80:80 pushpendumukherjee/fusionpactdevopschallenge-frontend:8
-        '
-        """
-    }
-}
+            steps {
+                sh """
+                    ssh -o StrictHostKeyChecking=no ubuntu@${EC2_IP} '
+                        docker pull pushpendumukherjee/${IMAGE_BACK}:${TAG}
+                        docker pull pushpendumukherjee/${IMAGE_FRONT}:${TAG}
 
+                        docker stop backend || true
+                        docker rm backend || true
+                        docker run -d --name backend -p 5000:5000 pushpendumukherjee/${IMAGE_BACK}:${TAG}
+
+                        docker stop frontend || true
+                        docker rm frontend || true
+                        docker run -d --name frontend -p 80:80 pushpendumukherjee/${IMAGE_FRONT}:${TAG}
+                    '
+                """
+            }
+        }
     }
 
     post {
