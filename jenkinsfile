@@ -5,9 +5,10 @@ pipeline {
         REPO = 'MukherjeePushpendu/Devops-Challenge'
         IMAGE_FRONT = 'fusionpactdevopschallenge-frontend'
         IMAGE_BACK = 'fusionpactdevopschallenge-backend'
-        TAG = "${BUILD_NUMBER}"   // Unique tag per build
+        TAG = "${BUILD_NUMBER}"           // Unique tag per build
         EC2_IP = '43.204.144.250'
         PEM_FILE = '/var/lib/jenkins/.ssh/heliii.pem'
+        REMOTE_DIR = '/home/ubuntu/fusionpact'
     }
 
     stages {
@@ -23,7 +24,7 @@ pipeline {
             }
         }
 
-        stage('Push to Docker Hub') {
+        stage('Push Docker Images') {
             steps {
                 withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
                     sh """
@@ -37,16 +38,95 @@ pipeline {
             }
         }
 
-        stage('Deploy to EC2') {
+        stage('Deploy with Docker Compose on EC2') {
             steps {
                 sh """
-                    ssh -i ${PEM_FILE} -o StrictHostKeyChecking=no ubuntu@${EC2_IP} \\
-                    "docker pull pushpendumukherjee/${IMAGE_BACK}:${TAG} &&
-                     docker pull pushpendumukherjee/${IMAGE_FRONT}:${TAG} &&
-                     docker stop backend frontend || true &&
-                     docker rm backend frontend || true &&
-                     docker run -d --name backend -p 5000:5000 pushpendumukherjee/${IMAGE_BACK}:${TAG} &&
-                     docker run -d --name frontend -p 80:80 pushpendumukherjee/${IMAGE_FRONT}:${TAG}"
+                    ssh -i ${PEM_FILE} -o StrictHostKeyChecking=no ubuntu@${EC2_IP} '
+                        # Create folder if it does not exist
+                        mkdir -p ${REMOTE_DIR} &&
+                        cd ${REMOTE_DIR} &&
+                        
+                        # Copy docker-compose.yml and prometheus.yml
+                        cat > docker-compose.yml <<EOF
+version: "3.9"
+
+services:
+  backend:
+    image: pushpendumukherjee/${IMAGE_BACK}:${TAG}
+    container_name: backend
+    ports:
+      - "5000:5000"
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  frontend:
+    image: pushpendumukherjee/${IMAGE_FRONT}:${TAG}
+    container_name: frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    ports:
+      - "9090:9090"
+    networks:
+      - app-network
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    user: "472:472"
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    ports:
+      - "3000:3000"
+    networks:
+      - app-network
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  grafana-storage: {}
+EOF
+
+                        cat > prometheus.yml <<EOF
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'backend'
+    static_configs:
+      - targets: ['backend:5000']
+EOF
+
+                        # Stop and remove old containers
+                        docker-compose down || true
+
+                        # Start all services
+                        docker-compose up -d
+                    '
                 """
             }
         }
@@ -54,10 +134,10 @@ pipeline {
 
     post {
         success {
-            echo "✅ Deployment successful! Docker images pushed with tag: ${TAG}"
+            echo "✅ Deployment successful! All containers are running with tag: ${TAG}"
         }
         failure {
-            echo '❌ Build or deployment failed. Check logs.'
+            echo '❌ Deployment failed. Check logs.'
         }
     }
 }
