@@ -41,20 +41,20 @@ pipeline {
         }
 
         stage('Deploy to EC2') {
-            steps {
-                sshagent (credentials: ["${SSH_KEY}"]) {
-                    sh """
-                        ssh -o StrictHostKeyChecking=no ${CLOUD_SERVER} '
-                            cd ~/fusionpact-devops-challenge || git clone https://github.com/${REPO}.git ~/fusionpact-devops-challenge
-                            cd ~/fusionpact-devops-challenge
-                            sudo docker compose down || true
-                            sudo docker compose pull || true
-                            sudo docker compose up -d
-                        '
-                    """
-                }
-            }
-        }
+    steps {
+        sh """
+        ssh -i /var/lib/jenkins/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@<EC2_IP> '
+            docker pull pushpendumukherjee/fusionpactdevopschallenge-backend:8 &&
+            docker pull pushpendumukherjee/fusionpactdevopschallenge-frontend:8 &&
+            docker stop backend || true && docker rm backend || true &&
+            docker run -d --name backend -p 5000:5000 pushpendumukherjee/fusionpactdevopschallenge-backend:8 &&
+            docker stop frontend || true && docker rm frontend || true &&
+            docker run -d --name frontend -p 80:80 pushpendumukherjee/fusionpactdevopschallenge-frontend:8
+        '
+        """
+    }
+}
+
     }
 
     post {
